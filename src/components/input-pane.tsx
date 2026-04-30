@@ -1,43 +1,62 @@
 import type { TextareaRenderable } from "@opentui/core"
-import { useEffect, useRef } from "react"
+import { forwardRef, useEffect, useRef } from "react"
+import type { Direction } from "../config.js"
 
 interface InputPaneProps {
   width: number
   height: number
+  direction: Direction
   onTextChange: (text: string) => void
 }
 
-export function InputPane({ width, height, onTextChange }: InputPaneProps) {
-  const ref = useRef<TextareaRenderable>(null)
+export const InputPane = forwardRef<TextareaRenderable, InputPaneProps>(
+  function InputPane({ width, height, direction, onTextChange }, forwardedRef) {
+    const localRef = useRef<TextareaRenderable>(null)
 
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.onContentChange = () => {
-      onTextChange(el.editBuffer.getText())
+    const setRef = (el: TextareaRenderable | null) => {
+      ;(localRef as React.MutableRefObject<TextareaRenderable | null>).current = el
+      if (typeof forwardedRef === "function") {
+        forwardedRef(el)
+      } else if (forwardedRef) {
+        ;(forwardedRef as React.MutableRefObject<TextareaRenderable | null>).current = el
+      }
     }
-    return () => {
-      el.onContentChange = undefined
-    }
-  }, [onTextChange])
 
-  return (
-    <box
-      width={width}
-      height={height}
-      border
-      borderStyle="rounded"
-      title=" 中文輸入 "
-      titleAlignment="center"
-      flexDirection="column"
-    >
-      <textarea
-        ref={ref}
-        flexGrow={1}
-        focused
-        placeholder="在這裡輸入中文... (Ctrl+T 翻譯)"
-        wrapMode="word"
-      />
-    </box>
-  )
-}
+    useEffect(() => {
+      const el = localRef.current
+      if (!el) return
+      el.onContentChange = () => {
+        onTextChange(el.editBuffer.getText())
+      }
+      return () => {
+        el.onContentChange = undefined
+      }
+    }, [onTextChange])
+
+    const title = direction === "zh2en" ? " 中文輸入 " : " English Input "
+    const placeholder =
+      direction === "zh2en"
+        ? "在這裡輸入中文... (Ctrl+T 翻譯)"
+        : "Type English here... (Ctrl+T to translate)"
+
+    return (
+      <box
+        width={width}
+        height={height}
+        border
+        borderStyle="rounded"
+        title={title}
+        titleAlignment="center"
+        flexDirection="column"
+      >
+        <textarea
+          ref={setRef}
+          flexGrow={1}
+          focused
+          placeholder={placeholder}
+          wrapMode="word"
+        />
+      </box>
+    )
+  },
+)

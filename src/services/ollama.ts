@@ -1,4 +1,5 @@
 import { CONFIG } from "../config.js"
+import type { Direction } from "../config.js"
 
 interface OllamaGenerateChunk {
   model: string
@@ -17,10 +18,11 @@ export async function checkOllamaHealth(): Promise<boolean> {
 }
 
 export async function* translateStream(
-  chineseText: string,
+  sourceText: string,
+  direction: Direction,
   signal?: AbortSignal,
 ): AsyncGenerator<string, void, unknown> {
-  const prompt = `${CONFIG.systemPrompt}\n\n${chineseText}`
+  const prompt = `${CONFIG.systemPrompts[direction]}\n\n${sourceText}`
 
   const res = await fetch(`${CONFIG.ollamaBaseUrl}/api/generate`, {
     method: "POST",

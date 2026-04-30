@@ -1,11 +1,15 @@
+import type { Direction } from "../config.js"
+
 interface StatusBarProps {
   width: number
   message: string
   isTranslating: boolean
+  direction: Direction
 }
 
-export function StatusBar({ width, message, isTranslating }: StatusBarProps) {
-  const hints = " ^T: 翻譯  ^Y: 複製  ^Q: 退出"
+export function StatusBar({ width, message, isTranslating, direction }: StatusBarProps) {
+  const dirLabel = direction === "zh2en" ? "ZH→EN" : "EN→ZH"
+  const hints = ` ^T: 翻譯  ^L: 切換方向  ^Y: 複製  ^Q: 退出  [${dirLabel}]`
   const status = isTranslating ? " [翻譯中...]" : message ? ` ${message}` : ""
 
   return (

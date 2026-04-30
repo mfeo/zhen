@@ -1,13 +1,17 @@
+import type { Direction } from "../config.js"
+
 interface OutputPaneProps {
   width: number
   height: number
+  direction: Direction
   text: string
   isTranslating: boolean
 }
 
-export function OutputPane({ width, height, text, isTranslating }: OutputPaneProps) {
+export function OutputPane({ width, height, direction, text, isTranslating }: OutputPaneProps) {
   const displayText = isTranslating && !text ? "Translating..." : text || "Translation will appear here"
   const textColor = !text && !isTranslating ? "#555555" : "#ffffff"
+  const title = direction === "zh2en" ? " English Translation " : " 中文翻譯 "
 
   return (
     <box
@@ -15,7 +19,7 @@ export function OutputPane({ width, height, text, isTranslating }: OutputPanePro
       height={height}
       border
       borderStyle="rounded"
-      title=" English Translation "
+      title={title}
       titleAlignment="center"
       flexDirection="column"
     >
