@@ -21,7 +21,7 @@ export function warmupOllama(): void {
   void fetch(`${CONFIG.ollamaBaseUrl}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: CONFIG.model, prompt: "", keep_alive: "24h" }),
+    body: JSON.stringify({ model: CONFIG.model, prompt: "", think: false, keep_alive: "24h" }),
   }).catch(() => {})
 }
 
@@ -38,6 +38,7 @@ export async function* translateStream(
       system: CONFIG.systemPrompts[direction],
       prompt: sourceText,
       stream: true,
+      think: false,
       keep_alive: "24h",
       options: { temperature: 0 },
     }),
