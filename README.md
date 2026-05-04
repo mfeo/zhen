@@ -1,8 +1,8 @@
 # zhen
 
-A terminal UI tool for Chinese-to-English translation using local LLM (Ollama).
+A terminal UI for bidirectional Chinese ↔ English translation using a local LLM (Ollama).
 
-Split-pane layout: type Chinese on the left, see English translation streaming on the right.
+Split-pane layout: type on the left, see the translation streaming on the right.
 
 Built with [OpenTUI](https://github.com/anomalyco/opentui) + Bun.
 
@@ -24,6 +24,7 @@ bun run start
 | Key | Action |
 |---|---|
 | `Ctrl+T` | Translate |
+| `Ctrl+L` | Toggle direction (zh→en / en→zh) |
 | `Ctrl+Y` | Copy translation to clipboard |
 | `Ctrl+Q` / `Esc` | Quit |
 
