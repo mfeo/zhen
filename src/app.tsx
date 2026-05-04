@@ -37,10 +37,29 @@ export function App() {
     setIsTranslating(true)
     setOutputText("")
 
+    const t0 = Date.now()
+    let firstChunkSeen = false
+    let pending = ""
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const flush = () => {
+      flushTimer = null
+      if (!pending) return
+      const toAppend = pending
+      pending = ""
+      setOutputText((prev) => prev + toAppend)
+    }
+
     try {
       for await (const chunk of translateStream(inputText, direction, ac.signal)) {
-        setOutputText((prev) => prev + chunk)
+        if (!firstChunkSeen) {
+          firstChunkSeen = true
+          showStatus(`TTFT ${Date.now() - t0}ms`, 2500)
+        }
+        pending += chunk
+        if (flushTimer === null) flushTimer = setTimeout(flush, 33)
       }
+      if (flushTimer !== null) clearTimeout(flushTimer)
+      flush()
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return
       const msg = e instanceof Error ? e.message : String(e)

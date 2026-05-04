@@ -17,17 +17,30 @@ export async function checkOllamaHealth(): Promise<boolean> {
   }
 }
 
+export function warmupOllama(): void {
+  void fetch(`${CONFIG.ollamaBaseUrl}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: CONFIG.model, prompt: "", keep_alive: "24h" }),
+  }).catch(() => {})
+}
+
 export async function* translateStream(
   sourceText: string,
   direction: Direction,
   signal?: AbortSignal,
 ): AsyncGenerator<string, void, unknown> {
-  const prompt = `${CONFIG.systemPrompts[direction]}\n\n${sourceText}`
-
   const res = await fetch(`${CONFIG.ollamaBaseUrl}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: CONFIG.model, prompt, stream: true }),
+    body: JSON.stringify({
+      model: CONFIG.model,
+      system: CONFIG.systemPrompts[direction],
+      prompt: sourceText,
+      stream: true,
+      keep_alive: "24h",
+      options: { temperature: 0 },
+    }),
     signal,
   })
 

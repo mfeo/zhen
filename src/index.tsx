@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { createCliRenderer } from "@opentui/core"
 import { createRoot } from "@opentui/react"
-import { checkOllamaHealth } from "./services/ollama.js"
+import { checkOllamaHealth, warmupOllama } from "./services/ollama.js"
 import { CONFIG } from "./config.js"
 import { App } from "./app.js"
 
@@ -12,6 +12,8 @@ if (!healthy) {
   console.error(`And ensure the model is pulled: ollama pull ${CONFIG.model}`)
   process.exit(1)
 }
+
+warmupOllama()
 
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,
