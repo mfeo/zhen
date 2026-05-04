@@ -1,4 +1,4 @@
-# cn2en
+# zhen
 
 A terminal UI tool for Chinese-to-English translation using local LLM (Ollama).
 
