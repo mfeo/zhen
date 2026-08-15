@@ -1,4 +1,4 @@
-package main
+package ollama
 
 import (
 	"bytes"
@@ -8,15 +8,17 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"zhen/internal/config"
 )
 
 // Client talks to a local Ollama server.
 type Client struct {
-	cfg  Config
+	cfg  config.Config
 	http *http.Client
 }
 
-func NewClient(cfg Config) *Client {
+func NewClient(cfg config.Config) *Client {
 	// No overall timeout: a translation stream is long-lived and is bounded by
 	// the caller's context instead.
 	return &Client{cfg: cfg, http: &http.Client{}}
@@ -81,7 +83,7 @@ func (c *Client) Warmup() {
 // Translate streams the translation of src, emitting each token to onChunk.
 // It returns when the stream ends, ctx is cancelled, or an error occurs.
 // Cancelling ctx closes the HTTP connection, which stops Ollama generating.
-func (c *Client) Translate(ctx context.Context, src string, dir Direction, onChunk func(string)) error {
+func (c *Client) Translate(ctx context.Context, src string, dir config.Direction, onChunk func(string)) error {
 	body, err := json.Marshal(generateRequest{
 		Model:     c.cfg.Model,
 		System:    dir.SystemPrompt(),

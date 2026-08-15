@@ -1,4 +1,4 @@
-package main
+package config
 
 import "testing"
 
@@ -55,10 +55,10 @@ func TestDirectionPlaceholdersFollowDirection(t *testing.T) {
 	}
 }
 
-func TestLoadConfigDefaults(t *testing.T) {
+func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OLLAMA_URL", "")
 	t.Setenv("OLLAMA_MODEL", "")
-	cfg := LoadConfig()
+	cfg := Load()
 	if cfg.BaseURL != "http://localhost:11434" {
 		t.Errorf("BaseURL = %q", cfg.BaseURL)
 	}
@@ -67,10 +67,10 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFromEnv(t *testing.T) {
+func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("OLLAMA_URL", "http://box:9999")
 	t.Setenv("OLLAMA_MODEL", "qwen2.5:7b")
-	cfg := LoadConfig()
+	cfg := Load()
 	if cfg.BaseURL != "http://box:9999" || cfg.Model != "qwen2.5:7b" {
 		t.Errorf("env not honoured: %+v", cfg)
 	}

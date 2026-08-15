@@ -2,7 +2,13 @@
 
 Measured on: Linux 6.18 (WSL2), x64, Bun 1.2.20, Ollama `gemma4:e2b`.
 
-All numbers are **warm** unless stated. Reproduce with the scripts in this directory.
+All numbers are **warm** unless stated.
+
+> **Historical record.** This measures the TypeScript/Bun implementation that Go
+> replaced in August 2026. The `startup.ts` and `ttft.ts` scripts referenced
+> below were removed together with that implementation; both are recoverable
+> from git history at commit `55f653b`. The comparison against the Go numbers is
+> in [`../docs/port-research.md`](../docs/port-research.md).
 
 ## Startup & memory
 

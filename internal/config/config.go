@@ -1,4 +1,4 @@
-package main
+package config
 
 import "os"
 
@@ -62,7 +62,7 @@ type Config struct {
 	Model   string
 }
 
-func LoadConfig() Config {
+func Load() Config {
 	return Config{
 		BaseURL: envOr("OLLAMA_URL", "http://localhost:11434"),
 		Model:   envOr("OLLAMA_MODEL", "gemma4:e2b"),

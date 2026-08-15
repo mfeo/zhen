@@ -1,15 +1,20 @@
 # Porting zhen to Rust or Go — research findings
 
-**Status:** Go investigated by building a working spike. Rust investigated on
-paper only — no Rust toolchain is installed on this machine and installing one
-was declined, so every Rust claim below is unverified and marked as such.
+**Status:** **Decided and shipped.** The Go port replaced the TypeScript
+implementation in August 2026 and is now the only implementation; the paths this
+document refers to as `spikes/go-tui/` are now `main.go` and `internal/`. The
+TypeScript sources remain in git history at commit `55f653b` and earlier.
 
-**Recommendation: port to Go with Bubble Tea v2.** Reasoning in
+Rust was investigated on paper only — no Rust toolchain was installed on this
+machine and installing one was declined, so every Rust claim below is unverified
+and marked as such.
+
+**Recommendation was: port to Go with Bubble Tea v2.** Reasoning in
 [Verdict](#verdict).
 
 ---
 
-## 0. What zhen is today
+## 0. What zhen was before the port
 
 A terminal UI (TUI) for bidirectional Chinese ↔ English translation against a
 local Ollama server. 383 lines of TypeScript across 8 files, running on Bun,
@@ -60,14 +65,14 @@ gaps turn out to be large.
 
 ## 2. Go — investigated by building it
 
-[`spikes/go-tui/`](../spikes/go-tui/) is a working port: same layout, same four
-keybindings, same streaming behaviour, same environment variables. ~700 lines
-including 47 tests.
+The spike was a working port: same layout, same four keybindings, same streaming
+behaviour, same environment variables. ~700 lines including 47 tests. It has
+since been promoted to the project proper — see the README for the current
+layout.
 
 ```
-cd spikes/go-tui
-go test ./...          # 47 tests, ~4 s
-go run .               # needs Ollama on :11434
+make test    # go test ./...
+make check   # vet + race
 ```
 
 ### Stack
@@ -152,7 +157,8 @@ they are exactly what a spike is for. All three now have regression tests.
 
 ### Testing — the clearest win
 
-47 tests, passing under `-race`:
+47 tests at the end of the spike (55 after the resize and small-terminal work
+that followed), all passing under `-race`:
 
 - **NDJSON parser**: happy path, split at every byte offset, in-band error,
   early `done`, malformed JSON, truncated stream, empty body
@@ -165,7 +171,7 @@ they are exactly what a spike is for. All three now have regression tests.
 - **Model logic** with no terminal: stale events, cancellation vs real errors,
   status-message expiry
 
-The current TypeScript version has **zero** tests, and OpenTUI has no published
+The TypeScript version had **zero** tests, and OpenTUI has no published
 equivalent of `teatest`. This is the largest single difference between the two
 stacks.
 
@@ -255,20 +261,27 @@ The decisive factors are testability and widget coverage, not performance. Both
 Go and Rust bury the performance question relative to Bun, and the user-visible
 latency belongs to Ollama regardless.
 
-### What the port still owes
+### What was still owed after the spike, and where it stands
 
-The spike is a spike, not a finished product. Before it replaces `src/`:
+Closed during the promotion to the project proper:
+
+- **Terminal resize** — `layout()` now clamps every widget dimension to at least
+  one cell, and tests assert both widgets are re-laid-out and that existing
+  output is re-wrapped rather than dropped.
+- **Terminals too small to draw the frame** — previously rendered blank, because
+  `Pane` returns an empty string below its minimum. Now shows a wrapped warning
+  sized to whatever space exists, down to a 1x1 terminal.
+
+Still open, and none of it is testable without a human at a real terminal:
 
 1. **CJK input method (IME) behaviour is untested.** `teatest` sends synthetic
-   key events; it cannot exercise a real IME. This needs a human at a terminal
-   and is the largest remaining unknown for a Chinese-input tool.
-2. **Terminal resize** is handled by `layout()` on `WindowSizeMsg` but has not
-   been exercised interactively.
-3. **OSC 52 through tmux and SSH** — `tea.SetClipboard` is the right mechanism,
+   key events; it cannot exercise a real IME. This is the largest remaining
+   unknown for a Chinese-input tool.
+2. **OSC 52 through tmux and SSH** — `tea.SetClipboard` is the right mechanism,
    but the end-to-end path is unverified.
-4. **Input pane scrolling** for text longer than the pane; the textarea supports
-   it, the composed frame has not been checked.
-5. **`arboard`-style native clipboard fallback** if OSC 52 proves insufficient on
+3. **Input pane scrolling** for text longer than the pane; the textarea supports
+   it, the composed frame has not been checked interactively.
+4. **`arboard`-style native clipboard fallback** if OSC 52 proves insufficient on
    any target terminal.
 
 ### If Rust is wanted anyway

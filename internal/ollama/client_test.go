@@ -1,4 +1,4 @@
-package main
+package ollama
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"zhen/internal/config"
 )
 
 // --- decodeStream: the NDJSON parser that replaces the manual line buffer in
@@ -110,7 +112,7 @@ func TestDecodeStreamEmpty(t *testing.T) {
 // --- Translate: HTTP behaviour against a fake Ollama ---
 
 func newClientFor(url string) *Client {
-	return NewClient(Config{BaseURL: url, Model: "test-model"})
+	return NewClient(config.Config{BaseURL: url, Model: "test-model"})
 }
 
 func TestTranslateSendsExpectedRequest(t *testing.T) {
@@ -124,7 +126,7 @@ func TestTranslateSendsExpectedRequest(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := newClientFor(srv.URL).Translate(context.Background(), "你好", ZH2EN, func(s string) {
+	if err := newClientFor(srv.URL).Translate(context.Background(), "你好", config.ZH2EN, func(s string) {
 		out.WriteString(s)
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -161,7 +163,7 @@ func TestTranslateUsesDirectionPrompt(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := newClientFor(srv.URL).Translate(context.Background(), "hi", EN2ZH, func(string) {}); err != nil {
+	if err := newClientFor(srv.URL).Translate(context.Background(), "hi", config.EN2ZH, func(string) {}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(gotBody, "Traditional Chinese") {
@@ -177,7 +179,7 @@ func TestTranslateHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	var emitted int
-	err := newClientFor(srv.URL).Translate(context.Background(), "hi", ZH2EN, func(string) { emitted++ })
+	err := newClientFor(srv.URL).Translate(context.Background(), "hi", config.ZH2EN, func(string) { emitted++ })
 	if err == nil {
 		t.Fatal("expected an error for a 404 response")
 	}
@@ -217,7 +219,7 @@ func TestTranslateCancelStopsServer(t *testing.T) {
 	var seen int
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- newClientFor(srv.URL).Translate(ctx, "hi", ZH2EN, func(string) {
+		errCh <- newClientFor(srv.URL).Translate(ctx, "hi", config.ZH2EN, func(string) {
 			seen++
 			if seen == 3 {
 				cancel()

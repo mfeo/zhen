@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"bytes"
@@ -12,7 +12,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	"zhen/internal/config"
 )
 
 // These drive the real Bubble Tea program against a fake Ollama and assert both
@@ -79,7 +82,7 @@ func (r *recorder) String() string {
 
 func newTUI(t *testing.T, url string) (*teatest.TestModel, *recorder) {
 	t.Helper()
-	m := initialModel(Config{BaseURL: url, Model: "test-model"})
+	m := newModel(config.Config{BaseURL: url, Model: "test-model"})
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(80, 20))
 	rec := &recorder{}
 
@@ -166,8 +169,8 @@ func TestCtrlLTogglesDirectionAndClearsPanes(t *testing.T) {
 	waitForPainted(t, rec, "EN→ZH", "English Input", "中文翻譯")
 
 	final := quit(t, tm)
-	if final.direction != EN2ZH {
-		t.Errorf("direction = %v, want EN2ZH", final.direction.Label())
+	if final.direction != config.EN2ZH {
+		t.Errorf("direction = %v, want config.EN2ZH", final.direction.Label())
 	}
 	// The previous translation must be gone, not left showing a result for the
 	// opposite direction.
@@ -177,7 +180,7 @@ func TestCtrlLTogglesDirectionAndClearsPanes(t *testing.T) {
 	if final.input.Value() != "" {
 		t.Errorf("input not cleared on toggle: %q", final.input.Value())
 	}
-	if final.input.Placeholder != EN2ZH.Placeholder() {
+	if final.input.Placeholder != config.EN2ZH.Placeholder() {
 		t.Errorf("placeholder = %q, want the en2zh one", final.input.Placeholder)
 	}
 }
@@ -343,7 +346,7 @@ func TestStaleStatusClearIsIgnored(t *testing.T) {
 }
 
 func testModel() model {
-	m := initialModel(Config{BaseURL: "http://unused", Model: "m"})
+	m := newModel(config.Config{BaseURL: "http://unused", Model: "m"})
 	m.width, m.height = 80, 20
 	m.layout()
 	return m
@@ -366,5 +369,117 @@ func TestFailedStreamRestoresPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(after.output.GetContent(), "Translation will appear here") {
 		t.Errorf("pane did not return to its idle text: %q", after.output.GetContent())
+	}
+}
+
+// --- terminal size handling ---
+
+// Resizing must re-lay-out both widgets, not just the frame drawn around them.
+func TestResizeRelaysOutWidgets(t *testing.T) {
+	m := testModel()
+
+	got, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	wide := got.(model)
+	if wide.output.Width() != 120-60-2 {
+		t.Errorf("output width = %d, want %d", wide.output.Width(), 120-60-2)
+	}
+	if wide.input.Width() != 60-2 {
+		t.Errorf("input width = %d, want %d", wide.input.Width(), 60-2)
+	}
+	if wide.output.Height() != 40-1-2 {
+		t.Errorf("output height = %d, want %d", wide.output.Height(), 40-1-2)
+	}
+
+	got, _ = wide.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	narrow := got.(model)
+	if narrow.output.Width() != 40-20-2 {
+		t.Errorf("output width after shrink = %d, want %d", narrow.output.Width(), 40-20-2)
+	}
+}
+
+// Existing output must survive a resize, re-wrapped to the new width rather
+// than dropped.
+func TestResizeRewrapsExistingOutput(t *testing.T) {
+	m := testModel()
+	m.outputText = "The weather is nice today and I plan to walk in the park"
+
+	got, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	after := got.(model)
+	if after.outputText != m.outputText {
+		t.Fatalf("output text lost on resize: %q", after.outputText)
+	}
+	for _, line := range WrapCells(after.outputText, after.output.Width()) {
+		if lipgloss.Width(line) > after.output.Width() {
+			t.Errorf("line %q exceeds the new pane width %d", line, after.output.Width())
+		}
+	}
+}
+
+// A terminal too small for the frame must say so rather than render blank. The
+// message wraps to the available width, so the assertion is on the text with
+// line breaks removed.
+func TestTinyTerminalShowsAMessage(t *testing.T) {
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 10, Height: 20},
+		{Width: 80, Height: 3},
+		{Width: 23, Height: 4},
+	} {
+		m := testModel()
+		got, _ := m.Update(size)
+		view := got.(model).View().Content
+
+		// Re-join across the wrap points and the padding fitCells added.
+		flat := strings.Join(strings.Fields(stripANSI(view)), " ")
+		if !strings.Contains(flat, "Terminal too small") {
+			t.Errorf("%dx%d rendered %q, want a size warning", size.Width, size.Height, view)
+		}
+		for i, line := range strings.Split(view, "\n") {
+			if w := lipgloss.Width(line); w != size.Width {
+				t.Errorf("%dx%d line %d is %d cells, want %d", size.Width, size.Height, i, w, size.Width)
+			}
+		}
+	}
+}
+
+// The degenerate case: too narrow to fit even one word, and only one row. It
+// must not panic and must not overflow the single row it has.
+func TestOneByOneTerminalDoesNotPanic(t *testing.T) {
+	m := testModel()
+	got, _ := m.Update(tea.WindowSizeMsg{Width: 1, Height: 1})
+	view := got.(model).View().Content
+	if n := len(strings.Split(view, "\n")); n != 1 {
+		t.Errorf("rendered %d rows into a 1-row terminal", n)
+	}
+}
+
+// stripANSI removes SGR escape sequences so assertions can look at plain text.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// At the minimum size the real frame must render, and stay exactly that wide.
+func TestMinimumSizeRendersTheFrame(t *testing.T) {
+	m := testModel()
+	got, _ := m.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	view := got.(model).View().Content
+	if strings.Contains(view, "Terminal too small") {
+		t.Fatalf("%dx%d should render the frame, got %q", minWidth, minHeight, view)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w != minWidth {
+			t.Errorf("line %d is %d cells, want %d", i, w, minWidth)
+		}
 	}
 }

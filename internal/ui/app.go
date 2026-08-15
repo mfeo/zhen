@@ -1,9 +1,8 @@
-package main
+package ui
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -11,6 +10,9 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"zhen/internal/config"
+	"zhen/internal/ollama"
 )
 
 // ---------- messages ----------
@@ -31,13 +33,13 @@ type clearStatusMsg struct{ token int }
 // ---------- model ----------
 
 type model struct {
-	cfg    Config
-	client *Client
+	cfg    config.Config
+	client *ollama.Client
 
 	input  textarea.Model
 	output viewport.Model
 
-	direction   Direction
+	direction   config.Direction
 	outputText  string
 	translating bool
 	status      string
@@ -57,9 +59,14 @@ type model struct {
 	sawFirst    bool
 }
 
-func initialModel(cfg Config) model {
+// New builds the root Bubble Tea model for the translator UI.
+func New(cfg config.Config) tea.Model {
+	return newModel(cfg)
+}
+
+func newModel(cfg config.Config) model {
 	ta := textarea.New()
-	ta.Placeholder = ZH2EN.Placeholder()
+	ta.Placeholder = config.ZH2EN.Placeholder()
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
 	ta.Focus()
@@ -68,10 +75,10 @@ func initialModel(cfg Config) model {
 
 	return model{
 		cfg:       cfg,
-		client:    NewClient(cfg),
+		client:    ollama.NewClient(cfg),
 		input:     ta,
 		output:    vp,
-		direction: ZH2EN,
+		direction: config.ZH2EN,
 	}
 }
 
@@ -251,15 +258,29 @@ var (
 	plainStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff"))
 )
 
+// minWidth/minHeight are the smallest terminal that can hold two bordered panes
+// with a usable column of text inside each, plus the status bar.
+const (
+	minWidth  = 24
+	minHeight = 5
+)
+
+func (m model) tooSmall() bool {
+	return m.width < minWidth || m.height < minHeight
+}
+
+// layout resizes the two widgets to the current terminal. It clamps to at least
+// one cell: a resize below the minimum still reaches the widgets, and both panic
+// or misbehave on a negative dimension.
 func (m *model) layout() {
 	paneW := m.width / 2
 	contentH := m.height - 1
 
-	m.input.SetWidth(paneW - 2)
-	m.input.SetHeight(contentH - 2)
+	m.input.SetWidth(max(1, paneW-2))
+	m.input.SetHeight(max(1, contentH-2))
 
-	m.output.SetWidth(m.width - paneW - 2)
-	m.output.SetHeight(contentH - 2)
+	m.output.SetWidth(max(1, m.width-paneW-2))
+	m.output.SetHeight(max(1, contentH-2))
 }
 
 func (m *model) refreshOutput() {
@@ -284,6 +305,13 @@ func (m model) View() tea.View {
 		return v
 	}
 
+	// Below the minimum the frame cannot be drawn at all — Pane would return an
+	// empty string and the user would face a blank screen with no explanation.
+	if m.tooSmall() {
+		v.SetContent(m.tooSmallView())
+		return v
+	}
+
 	paneW := m.width / 2
 	contentH := m.height - 1
 
@@ -302,6 +330,22 @@ func (m model) View() tea.View {
 	return v
 }
 
+// tooSmallView wraps the warning across as many rows as the terminal has rather
+// than truncating it to one line — at 10 columns a single clipped line reads
+// "Terminal t", which tells the user nothing.
+func (m model) tooSmallView() string {
+	msg := fmt.Sprintf("Terminal too small (need %d x %d)", minWidth, minHeight)
+
+	lines := WrapCells(msg, m.width)
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	for i, line := range lines {
+		lines[i] = fitCells(warnStyle.Render(line), m.width)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m model) statusBar() string {
 	hints := fmt.Sprintf(" ^T: 翻譯  ^L: 切換方向  ^Y: 複製  ^Q: 退出  [%s]", m.direction.Label())
 	bar := hintStyle.Render(hints)
@@ -313,41 +357,3 @@ func (m model) statusBar() string {
 	}
 	return fitCells(bar, m.width)
 }
-
-// ---------- entrypoint ----------
-
-func main() {
-	cfg := LoadConfig()
-
-	// Benchmark hook, mirroring bench/startup.ts on the Bun side: build the model
-	// and render one full frame, then report how long the process took to get
-	// there. Kept in-process because Go's `main` package cannot be imported.
-	if os.Getenv("ZHEN_BENCH_STARTUP") != "" {
-		m := initialModel(cfg)
-		m.width, m.height = 80, 24
-		m.layout()
-		m.refreshOutput()
-		_ = m.View()
-		fmt.Printf("loaded_ms=%.1f\n", float64(time.Since(processStart).Microseconds())/1000)
-		return
-	}
-
-	client := NewClient(cfg)
-
-	if !client.Health(context.Background()) {
-		fmt.Fprintf(os.Stderr, "Cannot connect to Ollama at %s.\n", cfg.BaseURL)
-		fmt.Fprintln(os.Stderr, "Please start it with: ollama serve")
-		fmt.Fprintf(os.Stderr, "And ensure the model is pulled: ollama pull %s\n", cfg.Model)
-		os.Exit(1)
-	}
-	client.Warmup()
-
-	if _, err := tea.NewProgram(initialModel(cfg)).Run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-// processStart is stamped during package initialisation, as close to process
-// start as Go allows, so the benchmark hook measures runtime init too.
-var processStart = time.Now()
