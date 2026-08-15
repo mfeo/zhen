@@ -10,7 +10,7 @@ Single static binary, no runtime to install.
 ## Prerequisites
 
 - [Ollama](https://ollama.com) running locally
-- A model pulled: `ollama pull gemma4:e2b`
+- A model pulled: `ollama pull qwen2.5:3b`
 - Go 1.24+ (only to build)
 
 ## Install
@@ -46,7 +46,7 @@ in a local terminal.
 | Environment Variable | Default |
 |---|---|
 | `OLLAMA_URL` | `http://localhost:11434` |
-| `OLLAMA_MODEL` | `gemma4:e2b` |
+| `OLLAMA_MODEL` | `qwen2.5:3b` |
 
 ```bash
 OLLAMA_MODEL=qwen2.5:7b zhen

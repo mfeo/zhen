@@ -79,7 +79,7 @@ Keys:
 
 Environment:
   OLLAMA_URL     Ollama base URL      (default http://localhost:11434)
-  OLLAMA_MODEL   model to translate with (default gemma4:e2b)
+  OLLAMA_MODEL   model to translate with (default qwen2.5:3b)
 
 Requires a running Ollama server: https://ollama.com
 `

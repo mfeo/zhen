@@ -62,7 +62,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.BaseURL != "http://localhost:11434" {
 		t.Errorf("BaseURL = %q", cfg.BaseURL)
 	}
-	if cfg.Model != "gemma4:e2b" {
+	if cfg.Model != "qwen2.5:3b" {
 		t.Errorf("Model = %q", cfg.Model)
 	}
 }
