@@ -45,10 +45,27 @@ in a local terminal.
 
 A translation longer than the pane scrolls; the plain arrow and page keys move
 the input cursor, so the shifted variants drive the translation pane. The mouse
-wheel scrolls it too, which means selecting text with the mouse needs `Shift`
-held down, as in any other mouse-reporting terminal application. The pane
-follows the stream while you are at the bottom and stops following as soon as
-you scroll up, so reading earlier output does not fight the incoming tokens.
+wheel scrolls it too. The pane follows the stream while you are at the bottom
+and stops following as soon as you scroll up, so reading earlier output does not
+fight the incoming tokens.
+
+### Selecting text with the mouse
+
+Drag inside either pane to select, and release to copy — no extra keypress. The
+selection is confined to the pane you started in, so it never picks up the frame
+or whatever the other pane happens to show on the same rows, which is what the
+terminal's own drag-select would do with two panes side by side.
+
+What gets copied is what is on screen, so a selection that spans wrapped rows is
+copied with those wrap points as line breaks. `Ctrl+Y` remains the way to copy
+the whole translation as one unwrapped block.
+
+The selection describes cells on the screen rather than a range in the text, so
+it is dropped as soon as those cells are repainted: by typing, scrolling, a
+resize, or the next translation token. Select once the translation has arrived.
+
+Because the application reads the mouse, the terminal's own selection needs
+`Shift` held down — use it if you want to copy across both panes at once.
 
 ## Configuration
 

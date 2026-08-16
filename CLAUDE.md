@@ -26,7 +26,7 @@ Every `.go` file must pass `gofmt`. Run `gofmt -l .` (empty output means clean).
 | `main.go` | entrypoint; flags, Ollama health check, program start. Logic lives in `run()` so it is testable without `os.Exit`. |
 | `internal/config` | `Direction` (zh2en / en2zh) with its prompts and pane titles; environment configuration |
 | `internal/ollama` | streaming client for Ollama's `/api/generate` NDJSON stream |
-| `internal/ui` | Bubble Tea model, hand-drawn panes, clipboard |
+| `internal/ui` | Bubble Tea model, hand-drawn panes, mouse selection, clipboard |
 
 **Bubble Tea v2** — the module path is `charm.land/bubbletea/v2`, not
 `github.com/charmbracelet/…`. The same applies to `bubbles` and `lipgloss`.
@@ -50,6 +50,15 @@ returns `io.EOF` whenever it is momentarily empty. Bubble Tea repaints only
 changed lines, so a second `teatest.WaitFor` loses everything the first
 consumed. `internal/ui/app_test.go` records output continuously into its own
 buffer; follow that pattern for new UI tests.
+
+**Selection highlighting indexes in cells, via `lipgloss.StyleRanges`.** It is
+built on `ansi.Cut`, so its `Range` bounds are terminal cells and it steps over
+escape sequences — which is why `internal/ui/selection.go` can highlight the
+rows the two widgets already painted instead of re-rendering them. Do not reach
+for `viewport.SetHighlights` instead: its bounds are byte offsets, and
+`viewport/highlight.go` walks `ansi.Strip(content)` while indexing the raw
+string, so it misbehaves on styled content — and it scrolls the viewport to the
+match as a side effect.
 
 **The textarea's virtual cursor must stay off.** `bubbles`' textarea defaults to
 painting a reverse-video block into its own output and returning `nil` from

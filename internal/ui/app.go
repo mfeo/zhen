@@ -51,6 +51,10 @@ type model struct {
 	// late events from the previous request are dropped instead of interleaving
 	// into the new output. This replaces the TS version's AbortController-plus-
 	// ref juggling with a single integer compared inside Update.
+	// sel is the live mouse selection, in screen coordinates. See selection.go
+	// for why it is not anchored to the text.
+	sel selection
+
 	gen         int
 	statusToken int
 	cancel      context.CancelFunc
@@ -101,11 +105,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.sel = selection{}
 		m.layout()
 		m.refreshOutput()
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// A selection describes cells on the screen, so anything that repaints
+		// them invalidates it. Every key does: it either types into the input,
+		// scrolls the output or replaces both.
+		m.sel = selection{}
+
 		switch msg.String() {
 		case "ctrl+q", "esc":
 			m.cancelStream()
@@ -140,6 +150,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseWheelMsg:
+		m.sel = selection{}
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.output.ScrollUp(mouseWheelLines)
@@ -147,6 +158,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.output.ScrollDown(mouseWheelLines)
 		}
 		return m, nil
+
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft {
+			return m, nil
+		}
+		m.sel = selection{}
+		if p, pos := m.paneAt(msg.X, msg.Y); p != paneNone {
+			m.sel = selection{pane: p, anchor: pos, head: pos, dragging: true}
+		}
+		return m, nil
+
+	case tea.MouseMotionMsg:
+		if m.sel.dragging {
+			// Clamped, not discarded: dragging past a pane's edge should extend
+			// the selection to it, the way it does everywhere else.
+			m.sel.head = m.clampToPane(m.sel.pane, msg.X, msg.Y)
+		}
+		return m, nil
+
+	case tea.MouseReleaseMsg:
+		if !m.sel.dragging {
+			return m, nil
+		}
+		m.sel.dragging = false
+		text := m.selectionText()
+		if text == "" {
+			m.sel = selection{} // a click that selected nothing just clears
+			return m, nil
+		}
+		m2, statusCmd := m.withStatus("✓ Copied!", okStyle)
+		return m2, tea.Batch(copyToClipboard(text), statusCmd)
 
 	case streamMsg:
 		return m.applyStream(streamEvent(msg))
@@ -306,12 +348,58 @@ func (m model) tooSmall() bool {
 	return m.width < minWidth || m.height < minHeight
 }
 
+// paneGeometry is the single source of truth for where the two panes are:
+// paneW is the left pane's total width, contentH the height of the pane row.
+// The inner (body) area of a pane is 2 cells narrower and 2 rows shorter, since
+// it is what the border encloses.
+func (m model) paneGeometry() (paneW, contentH int) {
+	return m.width / 2, m.height - 1
+}
+
+// paneAt maps a terminal cell to the pane body it falls in. Borders, the status
+// bar and, below the minimum size, the whole screen belong to no pane.
+func (m model) paneAt(x, y int) (paneID, cellPos) {
+	if m.tooSmall() {
+		return paneNone, cellPos{}
+	}
+	paneW, contentH := m.paneGeometry()
+	row := y - 1
+	if row < 0 || row > contentH-3 {
+		return paneNone, cellPos{}
+	}
+	switch {
+	case x >= 1 && x <= paneW-2:
+		return paneInput, cellPos{row: row, col: x - 1}
+	case x >= paneW+1 && x <= m.width-2:
+		return paneOutput, cellPos{row: row, col: x - paneW - 1}
+	}
+	return paneNone, cellPos{}
+}
+
+// clampToPane maps a terminal cell into a pane the pointer may have left.
+func (m model) clampToPane(p paneID, x, y int) cellPos {
+	paneW, contentH := m.paneGeometry()
+	col := x - paneW - 1
+	innerW := m.width - paneW - 2
+	if p == paneInput {
+		col = x - 1
+		innerW = paneW - 2
+	}
+	return cellPos{
+		row: clamp(y-1, 0, max(contentH-3, 0)),
+		col: clamp(col, 0, max(innerW-1, 0)),
+	}
+}
+
+func clamp(v, lo, hi int) int {
+	return min(max(v, lo), hi)
+}
+
 // layout resizes the two widgets to the current terminal. It clamps to at least
 // one cell: a resize below the minimum still reaches the widgets, and both panic
 // or misbehave on a negative dimension.
 func (m *model) layout() {
-	paneW := m.width / 2
-	contentH := m.height - 1
+	paneW, contentH := m.paneGeometry()
 
 	m.input.SetWidth(max(1, paneW-2))
 	m.input.SetHeight(max(1, contentH-2))
@@ -321,6 +409,14 @@ func (m *model) layout() {
 }
 
 func (m *model) refreshOutput() {
+	// The rows a selection points at are about to be repainted with different
+	// text, so it cannot survive. During a stream this fires on every token,
+	// which is why selecting is something you do once the translation has
+	// landed.
+	if m.sel.pane == paneOutput {
+		m.sel = selection{}
+	}
+
 	text, style := m.outputText, plainStyle
 	if text == "" {
 		if m.translating {
@@ -343,11 +439,40 @@ func (m *model) refreshOutput() {
 	}
 }
 
+// paneRows is what a pane currently paints, one string per visible row. Both
+// widgets are asked for their view rather than being re-rendered here, so a
+// selection lands on exactly the cells the user sees.
+func (m model) paneRows(p paneID) []string {
+	switch p {
+	case paneInput:
+		return strings.Split(m.input.View(), "\n")
+	case paneOutput:
+		return strings.Split(m.output.View(), "\n")
+	}
+	return nil
+}
+
+// paneBody is a pane's rows with the selection highlighted, ready for Pane to
+// frame.
+func (m model) paneBody(p paneID) string {
+	rows := m.paneRows(p)
+	if m.sel.pane != p {
+		return strings.Join(rows, "\n")
+	}
+	return strings.Join(highlightRows(rows, m.sel.resolve(rows)), "\n")
+}
+
+// selectionText is the plain text under the current selection.
+func (m model) selectionText() string {
+	rows := m.paneRows(m.sel.pane)
+	return selectedText(rows, m.sel.resolve(rows))
+}
+
 func (m model) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true
 	// Mouse reporting is a property of the view in Bubble Tea v2, not a program
-	// option. It is on so the wheel scrolls the output pane; the cost is the
+	// option. It is on so the wheel scrolls and dragging selects; the cost is the
 	// terminal's native drag-to-select, which then needs Shift held down.
 	v.MouseMode = tea.MouseModeCellMotion
 	if m.width == 0 {
@@ -361,11 +486,10 @@ func (m model) View() tea.View {
 		return v
 	}
 
-	paneW := m.width / 2
-	contentH := m.height - 1
+	paneW, contentH := m.paneGeometry()
 
-	left := Pane(paneW, contentH, m.direction.InputTitle(), m.input.View())
-	right := Pane(m.width-paneW, contentH, m.direction.OutputTitle(), m.output.View())
+	left := Pane(paneW, contentH, m.direction.InputTitle(), m.paneBody(paneInput))
+	right := Pane(m.width-paneW, contentH, m.direction.OutputTitle(), m.paneBody(paneOutput))
 
 	v.SetContent(lipgloss.JoinHorizontal(lipgloss.Top, left, right) + "\n" + m.statusBar())
 

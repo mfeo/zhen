@@ -236,6 +236,21 @@ func TestCtrlTOnWhitespaceInputDoesNothing(t *testing.T) {
 	}
 }
 
+// End to end: a drag in the real program must put the selected text on the
+// system clipboard, which over a terminal means an OSC 52 sequence on stdout.
+// No translation is involved, so nothing here depends on timing.
+func TestDragCopiesThroughOSC52(t *testing.T) {
+	tm, rec := newTUI(t, fakeOllama(t).URL)
+	waitForPainted(t, rec, "Translation will appear here")
+
+	tm.Send(press(outputX0, firstRow))
+	tm.Send(moveTo(outputX0+10, firstRow))
+	tm.Send(release(outputX0+10, firstRow))
+
+	waitForPainted(t, rec, osc52Sequence("Translation"))
+	quit(t, tm)
+}
+
 func TestCopyWithNothingToCopyShowsStatus(t *testing.T) {
 	tm, rec := newTUI(t, fakeOllama(t).URL)
 	waitForPainted(t, rec, "Translation will appear here")
@@ -804,5 +819,284 @@ func TestNoCursorWhenTheFrameIsNotDrawn(t *testing.T) {
 	got, _ := m.Update(tea.WindowSizeMsg{Width: 10, Height: 20})
 	if c := got.(model).View().Cursor; c != nil {
 		t.Errorf("cursor reported at (%d,%d) on a too-small terminal", c.Position.X, c.Position.Y)
+	}
+}
+
+// --- mouse selection ---
+
+// press, moveTo and release are the three messages a drag is made of. The
+// coordinates are absolute terminal cells, as the terminal reports them.
+func press(x, y int) tea.MouseClickMsg {
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func moveTo(x, y int) tea.MouseMotionMsg {
+	return tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func release(x, y int) tea.MouseReleaseMsg {
+	return tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+// In an 80x20 terminal the left pane is 40 wide, so the output pane's first
+// text cell is at x=41 and both panes' first text row is y=1.
+const (
+	inputX0  = 1
+	outputX0 = 41
+	firstRow = 1
+)
+
+func TestDraggingInTheOutputPaneSelectsAndCopies(t *testing.T) {
+	m := testModel()
+	m.outputText = "你好世界abc"
+	m.refreshOutput()
+
+	m = send(t, m, press(outputX0, firstRow), moveTo(outputX0+3, firstRow))
+	if got := m.selectionText(); got != "你好" {
+		t.Errorf("mid-drag selection = %q, want 你好", got)
+	}
+
+	got, cmd := m.Update(release(outputX0+3, firstRow))
+	after := got.(model)
+	if after.selectionText() != "你好" {
+		t.Errorf("selection after release = %q, want it to stay", after.selectionText())
+	}
+	if after.sel.dragging {
+		t.Error("still dragging after the button came up")
+	}
+	if cmd == nil {
+		t.Fatal("release returned no command, so nothing was copied")
+	}
+	if after.status != "✓ Copied!" {
+		t.Errorf("status = %q, want the copy confirmation", after.status)
+	}
+}
+
+func TestDraggingInTheInputPaneSelectsAndCopies(t *testing.T) {
+	m := typeInput(t, testModel(), "hello 世界")
+
+	m = send(t, m, press(inputX0, firstRow), moveTo(inputX0+8, firstRow), release(inputX0+8, firstRow))
+	if got := m.selectionText(); got != "hello 世界" {
+		t.Errorf("selection = %q, want the whole line", got)
+	}
+	if m.status != "✓ Copied!" {
+		t.Errorf("status = %q, want the copy confirmation", m.status)
+	}
+}
+
+// The selected text must be the pane's own text, never the border or whatever
+// the other pane happens to have on the same rows. That is the entire reason
+// this is done in the application instead of left to the terminal.
+func TestSelectionNeverPicksUpTheOtherPaneOrTheBorder(t *testing.T) {
+	m := testModel()
+	m.input.SetValue("這是輸入區的文字")
+	m.outputText = "這是輸出區的文字"
+	m.refreshOutput()
+
+	// Drag right across the output pane, from its first cell well past its edge.
+	m = send(t, m, press(outputX0, firstRow), moveTo(200, firstRow), release(200, firstRow))
+
+	got := m.selectionText()
+	if got != "這是輸出區的文字" {
+		t.Errorf("selected %q, want only the output pane's text", got)
+	}
+	if strings.ContainsAny(got, "│╭╮╰╯") {
+		t.Errorf("selection %q contains frame characters", got)
+	}
+}
+
+// A drag that leaves the pane extends the selection to its edge rather than
+// being ignored or escaping into the neighbouring pane.
+func TestDragOutsideThePaneIsClamped(t *testing.T) {
+	m := testModel()
+	m.outputText = "第一行的文字\n第二行的文字"
+	m.refreshOutput()
+
+	m = send(t, m, press(outputX0, firstRow), moveTo(-30, 400), release(-30, 400))
+	if m.sel.head.row < 0 || m.sel.head.col < 0 {
+		t.Errorf("head clamped to %+v, want it inside the pane", m.sel.head)
+	}
+	if got := m.selectionText(); !strings.Contains(got, "第一行的文字") {
+		t.Errorf("selected %q, want it to reach the first row's text", got)
+	}
+}
+
+// Clicking on a border, on the status bar or outside any pane starts nothing.
+func TestPressOutsideAPaneStartsNoSelection(t *testing.T) {
+	m := testModel()
+	m.outputText = "some output"
+	m.refreshOutput()
+
+	for _, p := range []struct {
+		name string
+		x, y int
+	}{
+		{"top border", 5, 0},
+		{"left frame edge", 0, 3},
+		{"divider between panes", 40, 3},
+		{"status bar", 5, 19},
+	} {
+		got := send(t, m, press(p.x, p.y), moveTo(p.x+5, p.y))
+		if got.sel.pane != paneNone {
+			t.Errorf("%s: started a selection in pane %v", p.name, got.sel.pane)
+		}
+		if got.selectionText() != "" {
+			t.Errorf("%s: selected %q", p.name, got.selectionText())
+		}
+	}
+}
+
+// A click with no drag clears any previous selection and copies nothing.
+func TestClickWithoutDraggingClearsTheSelection(t *testing.T) {
+	m := testModel()
+	m.outputText = "你好世界"
+	m.refreshOutput()
+	m = send(t, m, press(outputX0, firstRow), moveTo(outputX0+3, firstRow), release(outputX0+3, firstRow))
+	if m.selectionText() == "" {
+		t.Fatal("setup: nothing selected")
+	}
+
+	m.status = "" // the setup copy left one behind; a plain click must not set a new one
+
+	got, cmd := m.Update(press(outputX0+2, firstRow))
+	m = got.(model)
+	if m.selectionText() != "" {
+		t.Errorf("selection %q survived a plain click", m.selectionText())
+	}
+
+	got, cmd = m.Update(release(outputX0+2, firstRow))
+	if cmd != nil {
+		t.Error("a click that selected nothing still issued a command")
+	}
+	if got.(model).status == "✓ Copied!" {
+		t.Error("a click that selected nothing reported a copy")
+	}
+}
+
+// Only the left button selects; the right button must not start a drag.
+func TestRightButtonDoesNotSelect(t *testing.T) {
+	m := testModel()
+	m.outputText = "你好世界"
+	m.refreshOutput()
+
+	m = send(t, m,
+		tea.MouseClickMsg{X: outputX0, Y: firstRow, Button: tea.MouseRight},
+		moveTo(outputX0+4, firstRow),
+	)
+	if m.sel.pane != paneNone {
+		t.Errorf("right button started a selection in pane %v", m.sel.pane)
+	}
+}
+
+// A release with no drag in progress is a no-op, not a copy of a stale range.
+func TestReleaseWithoutADragIsANoOp(t *testing.T) {
+	m := testModel()
+	m.outputText = "你好世界"
+	m.refreshOutput()
+
+	got, cmd := m.Update(release(outputX0+4, firstRow))
+	if cmd != nil {
+		t.Error("a stray release issued a command")
+	}
+	if got.(model).status != "" {
+		t.Errorf("a stray release set the status to %q", got.(model).status)
+	}
+}
+
+// The selection lives in screen coordinates, so anything that repaints those
+// cells has to drop it rather than leave a highlight over unrelated text.
+func TestSelectionIsClearedByAnythingThatRepaints(t *testing.T) {
+	selected := func(t *testing.T) model {
+		t.Helper()
+		m := testModel()
+		m.outputText = strings.Repeat("你好世界，這是一段中文。", 30)
+		m.refreshOutput()
+		m = send(t, m, press(outputX0, firstRow), moveTo(outputX0+6, firstRow), release(outputX0+6, firstRow))
+		if m.selectionText() == "" {
+			t.Fatal("setup: nothing selected")
+		}
+		return m
+	}
+
+	for _, tc := range []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"a keystroke", tea.KeyPressMsg{Code: 'a', Text: "a"}},
+		{"scrolling with the keyboard", shift(tea.KeyUp)},
+		{"scrolling with the wheel", tea.MouseWheelMsg{Button: tea.MouseWheelUp}},
+		{"a resize", tea.WindowSizeMsg{Width: 100, Height: 30}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := send(t, selected(t), tc.msg)
+			if m.sel.pane != paneNone || m.selectionText() != "" {
+				t.Errorf("selection %q survived %s", m.selectionText(), tc.name)
+			}
+		})
+	}
+
+	t.Run("an incoming translation token", func(t *testing.T) {
+		m := selected(t)
+		m.gen, m.translating = 1, true
+		m = send(t, m, streamMsg{gen: 1, chunk: "更多"})
+		if m.sel.pane != paneNone || m.selectionText() != "" {
+			t.Errorf("selection %q survived a streamed token", m.selectionText())
+		}
+	})
+}
+
+// The frame is drawn by hand: a highlighted row must still be exactly as wide
+// as every other row, or the whole box drifts.
+func TestSelectionDoesNotDisturbTheFrame(t *testing.T) {
+	m := testModel()
+	m.input.SetValue("輸入區的中文字")
+	m.outputText = strings.Repeat("輸出區的中文字。", 10)
+	m.refreshOutput()
+
+	for _, tc := range []struct {
+		name           string
+		x0, y0, x1, y1 int
+	}{
+		{"output pane", outputX0, firstRow, outputX0 + 9, firstRow + 2},
+		{"input pane", inputX0, firstRow, inputX0 + 5, firstRow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sel := send(t, m, press(tc.x0, tc.y0), moveTo(tc.x1, tc.y1))
+			for i, line := range strings.Split(sel.View().Content, "\n") {
+				if w := lipgloss.Width(line); w != sel.width {
+					t.Errorf("line %d is %d cells wide, want %d", i, w, sel.width)
+				}
+			}
+			if !strings.Contains(sel.View().Content, "\x1b[7m") {
+				t.Error("no highlight painted for the selection")
+			}
+		})
+	}
+}
+
+// Selecting in one pane must not highlight the other.
+func TestOnlyTheSelectedPaneIsHighlighted(t *testing.T) {
+	m := testModel()
+	m.input.SetValue("輸入區的中文字")
+	m.outputText = "輸出區的中文字"
+	m.refreshOutput()
+
+	sel := send(t, m, press(outputX0, firstRow), moveTo(outputX0+6, firstRow))
+	if strings.Contains(sel.paneBody(paneInput), "\x1b[7m") {
+		t.Error("the input pane was highlighted by an output-pane selection")
+	}
+	if !strings.Contains(sel.paneBody(paneOutput), "\x1b[7m") {
+		t.Error("the output pane was not highlighted")
+	}
+}
+
+// Below the minimum size there is no frame to select in.
+func TestNoSelectionOnATooSmallTerminal(t *testing.T) {
+	m := testModel()
+	got, _ := m.Update(tea.WindowSizeMsg{Width: 10, Height: 4})
+	small := send(t, got.(model), press(2, 1), moveTo(6, 1), release(6, 1))
+
+	if small.sel.pane != paneNone || small.selectionText() != "" {
+		t.Errorf("selected %q on a too-small terminal", small.selectionText())
 	}
 }
