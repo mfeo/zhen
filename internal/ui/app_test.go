@@ -703,3 +703,106 @@ func TestNewTranslationResetsTheScrollPosition(t *testing.T) {
 		})
 	}
 }
+
+// --- cursor placement ---
+
+// The terminal's real cursor must be positioned inside the input pane. An IME
+// anchors its candidate window to it, so a cursor left unset parks the popup in
+// the bottom-right corner of the screen instead of beside the caret.
+func TestCursorIsPlacedInsideTheInputPane(t *testing.T) {
+	m := testModel()
+
+	c := m.View().Cursor
+	if c == nil {
+		t.Fatal("no cursor reported; the terminal cursor would stay where the renderer left it")
+	}
+	// (1,1) is the first cell inside the left pane's border.
+	if c.Position.X != 1 || c.Position.Y != 1 {
+		t.Errorf("empty input put the cursor at (%d,%d), want (1,1)", c.Position.X, c.Position.Y)
+	}
+}
+
+// Cursor columns are terminal cells: a CJK ideograph is two of them, so a rune
+// count would leave the caret — and the IME popup — half a pane to the left.
+func TestCursorAdvancesByCellsNotRunes(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		wantX int
+	}{
+		{"ab", 1 + 2},
+		{"你好世", 1 + 6},
+		{"你a好", 1 + 5},
+	} {
+		m := testModel()
+		m.input.SetValue(tc.value)
+		c := m.View().Cursor
+		if c == nil {
+			t.Fatalf("%q: no cursor reported", tc.value)
+		}
+		if c.Position.X != tc.wantX {
+			t.Errorf("%q put the cursor at column %d, want %d", tc.value, c.Position.X, tc.wantX)
+		}
+	}
+}
+
+func TestCursorFollowsTheInputDownTheLines(t *testing.T) {
+	m := testModel()
+	m.input.SetValue("你好\n世界ab")
+
+	c := m.View().Cursor
+	if c == nil {
+		t.Fatal("no cursor reported")
+	}
+	if c.Position.Y != 2 {
+		t.Errorf("cursor row = %d, want 2 (border + one line)", c.Position.Y)
+	}
+	if c.Position.X != 1+6 {
+		t.Errorf("cursor column = %d, want %d", c.Position.X, 1+6)
+	}
+}
+
+// typeInput drives text through Update the way a real keyboard does, rather
+// than SetValue: only the update loop repositions the textarea's own viewport.
+func typeInput(t *testing.T, m model, s string) model {
+	t.Helper()
+	for _, r := range s {
+		if r == '\n' {
+			m = send(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+			continue
+		}
+		m = send(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	return m
+}
+
+// Input taller than the pane scrolls inside the textarea; the cursor must stay
+// within the frame rather than being reported below it.
+func TestCursorStaysInsideTheFrameWhenInputOverflows(t *testing.T) {
+	m := typeInput(t, testModel(), strings.Repeat("很長的一行輸入內容。\n", 40))
+
+	c := m.View().Cursor
+	if c == nil {
+		t.Fatal("no cursor reported")
+	}
+	paneW, contentH := m.width/2, m.height-1
+	if c.Position.Y < 1 || c.Position.Y > contentH-2 {
+		t.Errorf("cursor row %d is outside the pane's rows 1..%d", c.Position.Y, contentH-2)
+	}
+	if c.Position.X < 1 || c.Position.X > paneW-2 {
+		t.Errorf("cursor column %d is outside the pane's columns 1..%d", c.Position.X, paneW-2)
+	}
+}
+
+// No frame is drawn below the minimum size and before the first resize, so
+// there is nowhere to put a cursor and none must be reported.
+func TestNoCursorWhenTheFrameIsNotDrawn(t *testing.T) {
+	if c := newModel(config.Config{}).View().Cursor; c != nil {
+		t.Errorf("cursor reported at (%d,%d) before the first resize", c.Position.X, c.Position.Y)
+	}
+
+	m := testModel()
+	got, _ := m.Update(tea.WindowSizeMsg{Width: 10, Height: 20})
+	if c := got.(model).View().Cursor; c != nil {
+		t.Errorf("cursor reported at (%d,%d) on a too-small terminal", c.Position.X, c.Position.Y)
+	}
+}

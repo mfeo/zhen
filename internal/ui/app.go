@@ -69,6 +69,14 @@ func newModel(cfg config.Config) model {
 	ta.Placeholder = config.ZH2EN.Placeholder()
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
+	// The textarea defaults to a *virtual* cursor: it paints a reverse-video
+	// block into its own output and Cursor() returns nil, so the real terminal
+	// cursor is never positioned and stays wherever the renderer finished — the
+	// bottom-right corner. An IME (input method editor, e.g. a Chinese phonetic
+	// input) anchors its candidate window to that real cursor, so composing text
+	// popped up in the corner instead of next to the caret. Turning the virtual
+	// cursor off makes Cursor() report a position for View() to place.
+	ta.SetVirtualCursor(false)
 	ta.Focus()
 
 	vp := viewport.New()

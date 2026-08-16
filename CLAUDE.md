@@ -51,6 +51,14 @@ changed lines, so a second `teatest.WaitFor` loses everything the first
 consumed. `internal/ui/app_test.go` records output continuously into its own
 buffer; follow that pattern for new UI tests.
 
+**The textarea's virtual cursor must stay off.** `bubbles`' textarea defaults to
+painting a reverse-video block into its own output and returning `nil` from
+`Cursor()`, which leaves the real terminal cursor parked wherever the renderer
+finished. An IME (input method editor) anchors its candidate window to that real
+cursor, so the popup lands in the bottom-right corner instead of beside the
+caret. `newModel` calls `SetVirtualCursor(false)` and `View()` offsets the
+reported position by the pane border.
+
 **Stream generations.** `model.gen` invalidates in-flight translations. Any new
 path that starts or cancels a request must bump it, or a stale response will
 interleave into the output pane.
