@@ -112,7 +112,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m2, statusCmd := m.withStatus("✓ Copied!", okStyle)
 			return m2, tea.Batch(copyToClipboard(m.outputText), statusCmd)
+
+		// The textarea has focus and owns up/down and pgup/pgdown for its own
+		// cursor, so the output viewport gets the shifted variants. Without these
+		// the viewport never receives an Update at all and everything scrolled
+		// past the top of the pane is unreachable.
+		case "shift+up":
+			m.output.ScrollUp(1)
+			return m, nil
+		case "shift+down":
+			m.output.ScrollDown(1)
+			return m, nil
+		case "shift+pgup":
+			m.output.PageUp()
+			return m, nil
+		case "shift+pgdown":
+			m.output.PageDown()
+			return m, nil
 		}
+
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.output.ScrollUp(mouseWheelLines)
+		case tea.MouseWheelDown:
+			m.output.ScrollDown(mouseWheelLines)
+		}
+		return m, nil
 
 	case streamMsg:
 		return m.applyStream(streamEvent(msg))
@@ -265,6 +291,9 @@ const (
 	minHeight = 5
 )
 
+// mouseWheelLines is how far one wheel notch scrolls the output pane.
+const mouseWheelLines = 3
+
 func (m model) tooSmall() bool {
 	return m.width < minWidth || m.height < minHeight
 }
@@ -293,14 +322,26 @@ func (m *model) refreshOutput() {
 			style = dimStyle
 		}
 	}
+	// Sticky scroll, but only while the user is already at the bottom. An
+	// unconditional GotoBottom would yank the view back down on every streamed
+	// token, making it impossible to read earlier output while a translation is
+	// still arriving. Measured before SetContent, i.e. against the old content.
+	stick := m.output.AtBottom()
+
 	wrapped := WrapCells(text, m.output.Width())
 	m.output.SetContent(style.Render(strings.Join(wrapped, "\n")))
-	m.output.GotoBottom() // equivalent of OpenTUI's stickyScroll
+	if stick {
+		m.output.GotoBottom()
+	}
 }
 
 func (m model) View() tea.View {
 	v := tea.NewView("")
 	v.AltScreen = true
+	// Mouse reporting is a property of the view in Bubble Tea v2, not a program
+	// option. It is on so the wheel scrolls the output pane; the cost is the
+	// terminal's native drag-to-select, which then needs Shift held down.
+	v.MouseMode = tea.MouseModeCellMotion
 	if m.width == 0 {
 		return v
 	}
@@ -347,7 +388,7 @@ func (m model) tooSmallView() string {
 }
 
 func (m model) statusBar() string {
-	hints := fmt.Sprintf(" ^T: 翻譯  ^L: 切換方向  ^Y: 複製  ^Q: 退出  [%s]", m.direction.Label())
+	hints := fmt.Sprintf(" ^T: 翻譯  ^L: 切換方向  ^Y: 複製  ⇧↑↓: 捲動  ^Q: 退出  [%s]", m.direction.Label())
 	bar := hintStyle.Render(hints)
 	switch {
 	case m.translating:

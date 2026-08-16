@@ -483,3 +483,223 @@ func TestMinimumSizeRendersTheFrame(t *testing.T) {
 		}
 	}
 }
+
+// --- output pane scrolling ---
+
+// scrollMarker sits at the very start of the scrollable fixture's output.
+const scrollMarker = "起點ALPHA。"
+
+// scrollableModel returns a model whose output is twice as tall as the pane, so
+// roughly half of it is off-screen at any time.
+func scrollableModel(t *testing.T) model {
+	t.Helper()
+	m := testModel()
+	// The marker makes the first line identifiable; the body repeats, so without
+	// it "is the top visible?" cannot be told apart from any other line.
+	m.outputText = scrollMarker + strings.Repeat("這是一段很長的翻譯結果，用來測試捲動。", 40)
+	m.refreshOutput()
+	if m.output.TotalLineCount() <= m.output.Height() {
+		t.Fatalf("fixture does not overflow: %d lines in a %d-row pane",
+			m.output.TotalLineCount(), m.output.Height())
+	}
+	return m
+}
+
+func shift(c rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: c, Mod: tea.ModShift}
+}
+
+func send(t *testing.T, m model, msgs ...tea.Msg) model {
+	t.Helper()
+	for _, msg := range msgs {
+		got, _ := m.Update(msg)
+		m = got.(model)
+	}
+	return m
+}
+
+// The whole point: text scrolled past the top of the pane must be reachable
+// again. Before the fix the viewport never received an Update and this was
+// impossible.
+func TestShiftArrowsScrollTheOutputPane(t *testing.T) {
+	m := scrollableModel(t)
+	bottom := m.output.YOffset()
+	if bottom == 0 {
+		t.Fatal("overflowing output should start scrolled to the bottom")
+	}
+
+	up := send(t, m, shift(tea.KeyUp))
+	if up.output.YOffset() != bottom-1 {
+		t.Errorf("shift+up gave offset %d, want %d", up.output.YOffset(), bottom-1)
+	}
+
+	down := send(t, up, shift(tea.KeyDown))
+	if down.output.YOffset() != bottom {
+		t.Errorf("shift+down gave offset %d, want %d", down.output.YOffset(), bottom)
+	}
+}
+
+// Scrolling all the way up must actually reveal the first line of the
+// translation, not merely move a counter.
+func TestScrollingUpRevealsTheStartOfTheTranslation(t *testing.T) {
+	m := scrollableModel(t)
+	if strings.Contains(stripANSI(m.output.View()), scrollMarker) {
+		t.Fatal("fixture already shows its first line; nothing is off-screen")
+	}
+	for i := m.output.YOffset(); i > 0; i-- {
+		m = send(t, m, shift(tea.KeyUp))
+	}
+	if !strings.Contains(stripANSI(m.output.View()), scrollMarker) {
+		t.Errorf("first line %q still not visible after scrolling to the top:\n%s",
+			scrollMarker, stripANSI(m.output.View()))
+	}
+}
+
+func TestShiftPageKeysScrollTheOutputPane(t *testing.T) {
+	m := scrollableModel(t)
+	bottom := m.output.YOffset()
+
+	up := send(t, m, shift(tea.KeyPgUp))
+	if up.output.YOffset() >= bottom {
+		t.Errorf("shift+pgup gave offset %d, want less than %d", up.output.YOffset(), bottom)
+	}
+
+	down := send(t, up, shift(tea.KeyPgDown))
+	if down.output.YOffset() != bottom {
+		t.Errorf("shift+pgdown gave offset %d, want back at %d", down.output.YOffset(), bottom)
+	}
+}
+
+func TestMouseWheelScrollsTheOutputPane(t *testing.T) {
+	m := scrollableModel(t)
+	bottom := m.output.YOffset()
+
+	up := send(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if up.output.YOffset() != bottom-mouseWheelLines {
+		t.Errorf("wheel up gave offset %d, want %d", up.output.YOffset(), bottom-mouseWheelLines)
+	}
+
+	down := send(t, up, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if down.output.YOffset() != bottom {
+		t.Errorf("wheel down gave offset %d, want %d", down.output.YOffset(), bottom)
+	}
+}
+
+// The scroll keys belong to the output pane; the focused textarea must not see
+// them as cursor movement or, worse, as text.
+func TestScrollKeysDoNotDisturbTheInput(t *testing.T) {
+	m := scrollableModel(t)
+	m.input.SetValue("你好\n世界")
+	before := m.input.Value()
+	line, col := m.input.Line(), m.input.LineInfo().ColumnOffset
+
+	m = send(t, m,
+		shift(tea.KeyUp), shift(tea.KeyDown),
+		shift(tea.KeyPgUp), shift(tea.KeyPgDown),
+		tea.MouseWheelMsg{Button: tea.MouseWheelUp},
+	)
+
+	if m.input.Value() != before {
+		t.Errorf("input text changed to %q, want %q", m.input.Value(), before)
+	}
+	if m.input.Line() != line || m.input.LineInfo().ColumnOffset != col {
+		t.Errorf("input cursor moved to (%d,%d), want (%d,%d)",
+			m.input.Line(), m.input.LineInfo().ColumnOffset, line, col)
+	}
+}
+
+// Sticky scroll must be conditional: while the user is reading further up, an
+// arriving token must not yank the view back to the bottom.
+func TestStreamingDoesNotStealAManualScrollPosition(t *testing.T) {
+	m := scrollableModel(t)
+	m.gen, m.translating = 1, true
+	m = send(t, m, shift(tea.KeyPgUp))
+	parked := m.output.YOffset()
+
+	m = send(t, m, streamMsg{gen: 1, chunk: "更多的譯文內容持續串流進來。"})
+	if m.output.YOffset() != parked {
+		t.Errorf("offset moved to %d during streaming, want it parked at %d",
+			m.output.YOffset(), parked)
+	}
+	if !strings.HasSuffix(m.outputText, "更多的譯文內容持續串流進來。") {
+		t.Error("streamed chunk was dropped")
+	}
+}
+
+// ...but the default remains stickiness: a reader sitting at the bottom keeps
+// following the stream.
+func TestStreamingFollowsTheBottomByDefault(t *testing.T) {
+	m := scrollableModel(t)
+	m.gen, m.translating = 1, true
+
+	m = send(t, m, streamMsg{gen: 1, chunk: strings.Repeat("新的內容。", 20)})
+	if !m.output.AtBottom() {
+		t.Errorf("offset %d is not at the bottom of %d lines",
+			m.output.YOffset(), m.output.TotalLineCount())
+	}
+}
+
+// Boundaries: scrolling cannot run off either end.
+func TestScrollingIsClampedAtBothEnds(t *testing.T) {
+	m := scrollableModel(t)
+
+	for i := 0; i < m.output.TotalLineCount()+10; i++ {
+		m = send(t, m, shift(tea.KeyUp))
+	}
+	if m.output.YOffset() != 0 {
+		t.Errorf("offset %d after over-scrolling up, want 0", m.output.YOffset())
+	}
+	if !m.output.AtTop() {
+		t.Error("AtTop() is false after scrolling to the top")
+	}
+
+	for i := 0; i < m.output.TotalLineCount()+10; i++ {
+		m = send(t, m, shift(tea.KeyDown))
+	}
+	if !m.output.AtBottom() {
+		t.Errorf("offset %d after over-scrolling down, want the bottom", m.output.YOffset())
+	}
+}
+
+// Output that fits in the pane has nothing to scroll, and scroll keys must not
+// push the visible text off-screen.
+func TestScrollKeysAreInertWhenOutputFits(t *testing.T) {
+	m := testModel()
+	m.outputText = "Short."
+	m.refreshOutput()
+
+	m = send(t, m, shift(tea.KeyUp), shift(tea.KeyPgUp), tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.output.YOffset() != 0 {
+		t.Errorf("offset %d, want 0 for content that fits", m.output.YOffset())
+	}
+	if !strings.Contains(stripANSI(m.output.View()), "Short.") {
+		t.Error("visible text disappeared")
+	}
+}
+
+// A parked scroll position belongs to the old translation: starting a new one,
+// or switching direction, must return to the top of the fresh content.
+func TestNewTranslationResetsTheScrollPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{"ctrl+t", ctrl('t')},
+		{"ctrl+l", ctrl('l')},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := scrollableModel(t)
+			m.input.SetValue("你好")
+			m = send(t, m, shift(tea.KeyPgUp))
+			if m.output.YOffset() == 0 {
+				t.Skip("pane is too tall for this fixture to scroll")
+			}
+
+			m = send(t, m, tc.key)
+			m.cancelStream()
+			if m.output.YOffset() != 0 {
+				t.Errorf("offset %d after %s, want 0", m.output.YOffset(), tc.name)
+			}
+		})
+	}
+}

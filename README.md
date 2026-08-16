@@ -36,10 +36,19 @@ zhen
 | `Ctrl+T` | Translate |
 | `Ctrl+L` | Toggle direction (zh→en / en→zh) |
 | `Ctrl+Y` | Copy translation to clipboard |
+| `Shift+↑` / `Shift+↓` | Scroll the translation one line |
+| `Shift+PgUp` / `Shift+PgDn` | Scroll the translation one page |
 | `Ctrl+Q` / `Esc` | Quit |
 
 The clipboard uses OSC 52, so `Ctrl+Y` works over SSH and inside tmux, not just
 in a local terminal.
+
+A translation longer than the pane scrolls; the plain arrow and page keys move
+the input cursor, so the shifted variants drive the translation pane. The mouse
+wheel scrolls it too, which means selecting text with the mouse needs `Shift`
+held down, as in any other mouse-reporting terminal application. The pane
+follows the stream while you are at the bottom and stops following as soon as
+you scroll up, so reading earlier output does not fight the incoming tokens.
 
 ## Configuration
 
